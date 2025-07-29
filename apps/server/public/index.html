@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Mediasoup WebRTC Demo</title>
+    <script src="https://unpkg.com/mediasoup-client@3/browser/mediasoup-client.min.js"></script>
+  </head>
+  <body>
+    <h1>Mediasoup WebRTC Demo</h1>
+    <video id="localVideo" autoplay muted playsinline></video>
+    <video id="remoteVideo" autoplay playsinline></video>
+    <script>
+      window.onload = function () {
+        // Replace with your server address and unique IDs
+        const roomId = "room" + Math.floor(Math.random() * 10000);
+        const peerId = "peer" + Math.floor(Math.random() * 10000);
+        const ws = new WebSocket(
+          `ws://localhost:8000?roomId=${roomId}&peerId=${peerId}`
+        );
+
+        let device;
+        let sendTransport;
+        let recvTransport;
+        let localStream;
+        let producer;
+        let consumers = new Map();
+        let pendingRequests = {};
+
+        ws.onopen = async () => {
+          console.log("WebSocket connected");
+
+          setTimeout(async () => {
+            await start();
+          }, 500);
+        };
+
+        ws.onmessage = async (event) => {
+          const msg = JSON.parse(event.data);
+          if (msg.id && pendingRequests[msg.id]) {
+            pendingRequests[msg.id](msg);
+            delete pendingRequests[msg.id];
+          } else if (msg.method) {
+            // Handle notifications if needed
+            if (msg.method === "newPeer") {
+              console.log("A new peer joined:", msg.data);
+            }
+            if (msg.method === "newProducer") {
+              // Auto-consume new producers
+              await consume(msg.data.producerId);
+            }
+            if (msg.method === "peerLeft") {
+              console.log("Peer left:", msg.data);
+            }
+          }
+        };
+
+        function sendRequest(method, data) {
+          return new Promise((resolve) => {
+            const id = Math.random().toString(36).substr(2, 9);
+            pendingRequests[id] = resolve;
+            ws.send(JSON.stringify({ id, request: true, method, data }));
+          });
+        }
+
+        async function start() {
+          // 1. Get router RTP capabilities
+          const routerRtpCapabilities = (
+            await sendRequest("getRouterRtpCapabilities", {})
+          ).data;
+
+          // 2. Load device
+          device = new mediasoupClient.Device();
+          await device.load({ routerRtpCapabilities });
+
+          // 3. Join room
+          await sendRequest("join", {
+            displayName: "Web Client",
+            device: device.handlerName,
+            rtpCapabilities: device.rtpCapabilities,
+          });
+
+          // 4. Create send transport
+          const sendTransportOptions = (
+            await sendRequest("createWebRtcTransport", { forceTcp: false })
+          ).data;
+          sendTransport = device.createSendTransport(sendTransportOptions);
+
+          sendTransport.on(
+            "connect",
+            ({ dtlsParameters }, callback, errback) => {
+              sendRequest("connectWebRtcTransport", {
+                transportId: sendTransportOptions.id,
+                dtlsParameters,
+              })
+                .then(() => callback())
+                .catch(errback);
+            }
+          );
+
+          sendTransport.on(
+            "produce",
+            ({ kind, rtpParameters }, callback, errback) => {
+              sendRequest("produce", {
+                transportId: sendTransportOptions.id,
+                kind,
+                rtpParameters,
+              })
+                .then((res) => callback({ id: res.data.id }))
+                .catch(errback);
+            }
+          );
+
+          // 5. Get user media and produce
+          localStream = await navigator.mediaDevices.getUserMedia({
+            audio: true,
+            video: true,
+          });
+          document.getElementById("localVideo").srcObject = localStream;
+          producer = await sendTransport.produce({
+            track: localStream.getVideoTracks()[0],
+          });
+
+          // 6. Create recv transport
+          const recvTransportOptions = (
+            await sendRequest("createWebRtcTransport", { forceTcp: false })
+          ).data;
+          recvTransport = device.createRecvTransport(recvTransportOptions);
+
+          recvTransport.on(
+            "connect",
+            ({ dtlsParameters }, callback, errback) => {
+              sendRequest("connectWebRtcTransport", {
+                transportId: recvTransportOptions.id,
+                dtlsParameters,
+              })
+                .then(() => callback())
+                .catch(errback);
+            }
+          );
+
+          // 7. Consume existing producers (if any)
+          // You may want to fetch peer list and their producers here, or rely on notifications
+        }
+
+        async function consume(producerId) {
+          // 8. Consume a producer
+          const { data } = await sendRequest("consume", {
+            producerId,
+            rtpCapabilities: device.rtpCapabilities,
+            transportId: recvTransport.id,
+          });
+          const consumer = await recvTransport.consume({
+            id: data.id,
+            producerId: data.producerId,
+            kind: data.kind,
+            rtpParameters: data.rtpParameters,
+          });
+          consumers.set(consumer.id, consumer);
+
+          if (consumer.kind === "video") {
+            const stream = new MediaStream([consumer.track]);
+            document.getElementById("remoteVideo").srcObject = stream;
+          }
+          // Resume the consumer
+          await sendRequest("resumeConsumer", { consumerId: consumer.id });
+        }
+      };
+    </script>
+  </body>
+</html>

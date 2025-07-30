@@ -8,6 +8,7 @@ import {
 import Peer from "./peer.js";
 import { config } from "../config.js";
 import WebSocket from "ws";
+import { Producer } from "mediasoup-client/types";
 
 class Room extends EventEmitter {
   id: string;
@@ -39,9 +40,10 @@ class Room extends EventEmitter {
     this._mediasoupRouter = await this.worker.createRouter({ mediaCodecs });
   }
 
-  createPeer(peerId: string, transport: WebSocket): Peer {
+  createPeer(peerId: string, transport: WebSocket): Peer | null {
     if (this.peers.has(peerId)) {
-      throw new Error(`Peer ${peerId} already exists`);
+      console.error(`Peer ${peerId} already exists`);
+      return null;
     }
 
     const peer = new Peer(peerId, transport);
@@ -91,32 +93,32 @@ class Room extends EventEmitter {
         case "join":
           if (!peer.data) peer.data = {};
           if (peer.data.joined) throw new Error("Peer already joined");
+          
           const { displayName, device, rtpCapabilities } = data;
+          
           peer.data.joined = true;
           peer.data.displayName = displayName;
           peer.data.device = device;
           peer.data.rtpCapabilities = rtpCapabilities;
+          
           this.broadcast(
             "newPeer",
             { id: peer.id, displayName, device },
             peer.id
           );
+          
           const peerInfos = Array.from(this.peers.values())
-            .filter(
-              (p) =>
-                p.id !== peer.id &&
-                p.data &&
-                p.data.displayName &&
-                p.data.device
-            )
-            .map((p) => ({
+            .filter(p => p.id !== peer.id && p.data.joined)
+            .map(p => ({
               id: p.id,
-              producerId:
-                p.data.producers && p.data.producers.size > 0
-                  ? Array.from(p.data.producers as Map<string, unknown>)[0][0]
-                  : null,
               displayName: p.data.displayName,
               device: p.data.device,
+              producers: p.data.producers
+                ? Array.from(p.data.producers.values() as Producer[]).map((pr) => ({
+                    id: pr.id,
+                    kind: pr.kind
+                  }))
+                : []
             }));
           peer.respond(id, true, { peers: peerInfos });
           break;
@@ -212,17 +214,26 @@ class Room extends EventEmitter {
           peer.respond(id, true, { id: producer.id });
           break;
 
-        case "closeProducer":
+        case "closeProducer": 
           if (!peer.data.joined) throw new Error("Peer not yet joined");
           if (!peer.data.producers) throw new Error("No producers");
           const { producerId } = data;
           const producerToClose = peer.data.producers.get(producerId);
           if (!producerToClose)
             throw new Error(`producer with id "${producerId}" not found`);
+
           producerToClose.close();
           peer.data.producers.delete(producerToClose.id);
+        
+          this.broadcast(
+            "producerClosed",
+            { producerId: producerToClose.id, peerId: peer.id },
+            peer.id
+          );
+        
           peer.respond(id, true, {});
           break;
+
 
         case "consume":
           if (!peer.data.joined) throw new Error("Peer not yet joined");
@@ -328,6 +339,13 @@ class Room extends EventEmitter {
           if (!pauseProducer)
             throw new Error(`producer with id "${pauseProducerId2}" not found`);
           await pauseProducer.pause();
+          
+          this.broadcast(
+            "producerPaused",
+            { producerId: pauseProducer.id, peerId: peer.id },
+            peer.id
+          );
+
           peer.respond(id, true, {});
           break;
 
@@ -341,6 +359,13 @@ class Room extends EventEmitter {
               `producer with id "${resumeProducerId2}" not found`
             );
           await resumeProducer.resume();
+
+          this.broadcast(
+            "producerResumed",
+            { producerId: resumeProducer.id, peerId: peer.id },
+            peer.id
+          );
+          
           peer.respond(id, true, {});
           break;
 
@@ -393,14 +418,17 @@ class Room extends EventEmitter {
     // Optional: Add custom handling here
   }
 
-  async handlePeerConnection(peerId: string, ws: WebSocket): Promise<Peer> {
+  async handlePeerConnection(peerId: string, ws: WebSocket): Promise<Peer | null> {
     if (this.hasPeer(peerId)) {
-      throw new Error(
-        `Peer with ID "${peerId}" already exists in room "${this.id}"`
-      );
+      console.error(`Peer with ID "${peerId}" already exists in room "${this.id}"`);
+      return null;
     }
 
     const peer = this.createPeer(peerId, ws);
+    if (!peer) {
+      ws.close(1011, "Peer creation failed");
+      return null;
+    }
 
     peer.onRequest = async (req) => {
       await this.handlePeerRequest(peer, req);

@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Consumer‑Only (joinData.peers)</title>
+  <style>
+    body { margin:0; background:#111; color:#eee; font-family:sans-serif }
+    #video-grid {
+      display: grid;
+      gap: 4px;
+      padding: 8px;
+    }
+    video, audio {
+      width: 100%;
+      background: #000;
+      object-fit: contain;
+    }
+    audio {
+      background: #222;
+    }
+    #controls {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: #222;
+      padding: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    #controls button, #controls input {
+      margin-right: 8px;
+      padding: 8px;
+      background: #333;
+      border: none;
+      color: #eee;
+      border-radius: 4px;
+    }
+    #controls button:hover { background: #444; cursor: pointer }
+  </style>
+</head>
+<body>
+
+  <div id="video-grid"></div>
+
+  <div id="controls">
+    <div>
+      <label>Room:</label> <span id="room-id"></span>
+    </div>
+    <div id="participant-count">0 participants</div>
+  </div>
+
+  <script type="module">
+    import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3';
+
+    // — state —
+    const roomId           = 'test-room';
+    const peerId           = 'peer' + Math.floor(Math.random() * 10000);
+    document.getElementById('room-id').textContent = roomId;
+
+    let ws, device, recvTransport;
+    const pending = {};
+    const peerStreams = {}; 
+
+    // — util —
+    function sendRequest(method, data = {}) {
+      return new Promise(res => {
+        const id = Math.random().toString(36).substr(2, 9);
+        pending[id] = res;
+        ws.send(JSON.stringify({ id, request: true, method, data }));
+      });
+    }
+
+    function updateCount() {
+      const videos = document.querySelectorAll('#video-grid video');
+      const count  = videos.length;
+      document.getElementById('participant-count')
+              .textContent = `${count} participant${count !== 1 ? 's' : ''}`;
+      const cols = count <= 1 ? 1 : count <= 4 ? 2 : count <= 9 ? 3 : 4;
+      document.getElementById('video-grid')
+              .style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+    }
+
+    // — consume flow —
+    async function consume(producerId, peerId, displayName) {
+      const { data } = await sendRequest('consume', {
+        producerId,
+        rtpCapabilities: device.rtpCapabilities,
+        transportId: recvTransport.id
+      });
+      const consumer = await recvTransport.consume({
+        id:            data.id,
+        producerId:    data.producerId,
+        kind:          data.kind,
+        rtpParameters: data.rtpParameters
+      });
+
+      let entry = peerStreams[peerId];
+      if (!entry) {
+        // first time we see this peer: make a single video element
+        const videoEl = document.createElement('video');
+        videoEl.autoplay    = true;
+        videoEl.playsInline = true;
+        videoEl.muted       = true;           // allow autoplay
+        videoEl.title       = displayName || peerId;
+        document.getElementById('video-grid').append(videoEl);
+
+        entry = {
+          stream:  new MediaStream(),
+          element: videoEl
+        };
+        entry.element.srcObject = entry.stream;
+        peerStreams[peerId] = entry;
+
+        // unmute on first user interaction
+        const unmute = () => {
+          entry.element.muted = false;
+          window.removeEventListener('click', unmute);
+        };
+        window.addEventListener('click', unmute, { once: true });
+      }
+
+      // add this new track (audio or video) into the same stream
+      entry.stream.addTrack(consumer.track);
+
+      await sendRequest('resumeConsumer', { consumerId: consumer.id });
+      updateCount();
+    }
+
+    // — core startup —
+    async function start() {
+      const { data: caps } = await sendRequest('getRouterRtpCapabilities');
+      device = new mediasoupClient.Device();
+      await device.load({ routerRtpCapabilities: caps });
+
+      const { data: joinData } = await sendRequest('join', {
+        displayName: peerId,
+        device:      device.handlerName,
+        rtpCapabilities: device.rtpCapabilities
+      });
+      console.log('>>> joinData.peers:', joinData.peers);
+
+      const { data: opts } = await sendRequest('createWebRtcTransport');
+      recvTransport = device.createRecvTransport({
+        ...opts,
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+      });
+      recvTransport.on('connect', ({ dtlsParameters }, cb, eb) => {
+        sendRequest('connectWebRtcTransport', { transportId: opts.id, dtlsParameters })
+          .then(cb).catch(eb);
+      });
+
+      for (const peer of (joinData.peers || [])) {
+        for (const p of (peer.producers || [])) {
+          await consume(p.id, peer.id, peer.displayName);
+        }
+      }
+    }
+
+    // — WebSocket & notifications —
+    function setupWS() {
+
+      const wsHost = 'localhost';
+
+      ws = new WebSocket(`ws://${wsHost}:8000?roomId=${roomId}&peerId=${peerId}`);
+      ws.onopen    = () => setTimeout(start, 500);
+      ws.onmessage = async ev => {
+        const msg = JSON.parse(ev.data);
+        if (msg.id && pending[msg.id]) {
+          pending[msg.id](msg);
+          delete pending[msg.id];
+        }
+        else if (msg.method === 'newProducer') {
+          const d = msg.data;
+          console.log('newProducer →', d.producerId, d.kind);
+          await consume(d.producerId, d.peerId, d.displayName);
+        }
+      };
+      ws.onerror = err => console.error('WS error', err);
+      ws.onclose = () => console.log('WS closed');
+    }
+
+    setupWS();
+
+    function setupUnmutedAutoplay() {
+      Object.values(peerStreams).forEach(({ element })=>{
+        element.muted = false;     // will succeed, because we’re inside a click
+      });
+    }
+
+    document.onclick(setupUnmutedAutoplay)
+
+  </script>
+
+</body>
+</html>

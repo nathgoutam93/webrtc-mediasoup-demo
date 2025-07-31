@@ -1,6 +1,6 @@
+import { config } from "../config.js";
 import { EventEmitter } from "events";
 import Peer from "./peer.js";
-import { config } from "../config.js";
 class Room extends EventEmitter {
     id;
     peers;
@@ -75,23 +75,6 @@ class Room extends EventEmitter {
                     peer.data.device = device;
                     peer.data.rtpCapabilities = rtpCapabilities;
                     this.broadcast("newPeer", { id: peer.id, displayName, device }, peer.id);
-                    // const peerInfos = Array.from(this.peers.values())
-                    //   .filter(
-                    //     (p) =>
-                    //       p.id !== peer.id &&
-                    //       p.data &&
-                    //       p.data.displayName &&
-                    //       p.data.device
-                    //   )
-                    //   .map((p) => ({
-                    //     id: p.id,
-                    //     producerId:
-                    //       p.data.producers && p.data.producers.size > 0
-                    //         ? Array.from(p.data.producers as Map<string, unknown>)[0][0]
-                    //         : null,
-                    //     displayName: p.data.displayName,
-                    //     device: p.data.device,
-                    //   }));
                     const peerInfos = Array.from(this.peers.values())
                         .filter(p => p.id !== peer.id && p.data.joined)
                         .map(p => ({
@@ -123,19 +106,12 @@ class Room extends EventEmitter {
                         webRtcTransportOptions.enableTcp = true;
                     }
                     const transport = await this._mediasoupRouter.createWebRtcTransport(webRtcTransportOptions);
-                    console.log(transport.iceCandidates);
-                    transport.on("icestatechange", (state) => {
-                        console.log("ICE state:", state);
-                    });
-                    transport.on("dtlsstatechange", (state) => {
-                        console.log("DTLS state:", state);
-                    });
-                    console.log("Transport created:", {
-                        id: transport.id,
-                        dtlsState: transport.dtlsState,
-                        iceState: transport.iceState,
-                        iceSelectedTuple: transport.iceSelectedTuple,
-                    });
+                    // console.log("Transport created:", {
+                    //   id: transport.id,
+                    //   dtlsState: transport.dtlsState,
+                    //   iceState: transport.iceState,
+                    //   iceSelectedTuple: transport.iceSelectedTuple,
+                    // });
                     if (!peer.data.transports)
                         peer.data.transports = new Map();
                     peer.data.transports.set(transport.id, transport);
@@ -174,7 +150,13 @@ class Room extends EventEmitter {
                         appData: { peerId: peer.id },
                     });
                     peer.data.producers.set(producer.id, producer);
-                    console.log("Producer created:", producer.id, producer.kind, "paused:", producer.paused);
+                    // console.log(
+                    //   "Producer created:",
+                    //   producer.id,
+                    //   producer.kind,
+                    //   "paused:",
+                    //   producer.paused
+                    // );
                     this.broadcast("newProducer", { peerId: peer.id, displayName: peer.data.displayName, producerId: producer.id, kind }, peer.id);
                     peer.respond(id, true, { id: producer.id });
                     break;
@@ -230,24 +212,15 @@ class Room extends EventEmitter {
                         appData: { peerId: peer.id },
                     });
                     peer.data.consumers.set(consumer.id, consumer);
-                    console.log("[consume] Consumer created:", {
-                        id: consumer.id,
-                        kind: consumer.kind,
-                        paused: consumer.paused,
-                        producerPaused: consumer.producerPaused,
-                    });
+                    // console.log("[consume] Consumer created:", {
+                    //   id: consumer.id,
+                    //   kind: consumer.kind,
+                    //   paused: consumer.paused,
+                    //   producerPaused: consumer.producerPaused,
+                    // });
                     consumer.on("producerclose", () => {
                         peer.notify("consumerClosed", { consumerId: consumer.id });
                         peer.data.consumers.delete(consumer.id);
-                    });
-                    consumer.on("score", (score) => {
-                        console.log("[consume] Consumer score:", score);
-                    });
-                    consumer.on("trace", (trace) => {
-                        console.log("[consume] Trace:", trace);
-                    });
-                    consumer.on("transportclose", () => {
-                        console.log("[consume] Transport closed for consumer:", consumer.id);
                     });
                     peer.respond(id, true, {
                         id: consumer.id,

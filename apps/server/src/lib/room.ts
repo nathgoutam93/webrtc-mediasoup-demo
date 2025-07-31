@@ -1,3 +1,5 @@
+import { config } from "../config.js";
+
 import { EventEmitter } from "events";
 import {
   Router,
@@ -5,10 +7,10 @@ import {
   WebRtcServer,
   Worker,
 } from "mediasoup/types";
-import Peer from "./peer.js";
-import { config } from "../config.js";
 import WebSocket from "ws";
 import { Producer } from "mediasoup-client/types";
+
+import Peer from "./peer.js";
 
 class Room extends EventEmitter {
   id: string;
@@ -146,21 +148,12 @@ class Room extends EventEmitter {
             webRtcTransportOptions
           );
 
-          console.log(transport.iceCandidates);
-
-          transport.on("icestatechange", (state) => {
-            console.log("ICE state:", state);
-          });
-          transport.on("dtlsstatechange", (state) => {
-            console.log("DTLS state:", state);
-          });
-
-          console.log("Transport created:", {
-            id: transport.id,
-            dtlsState: transport.dtlsState,
-            iceState: transport.iceState,
-            iceSelectedTuple: transport.iceSelectedTuple,
-          });
+          // console.log("Transport created:", {
+          //   id: transport.id,
+          //   dtlsState: transport.dtlsState,
+          //   iceState: transport.iceState,
+          //   iceSelectedTuple: transport.iceSelectedTuple,
+          // });
 
           if (!peer.data.transports) peer.data.transports = new Map();
           peer.data.transports.set(transport.id, transport);
@@ -198,13 +191,13 @@ class Room extends EventEmitter {
           });
           peer.data.producers.set(producer.id, producer);
 
-          console.log(
-            "Producer created:",
-            producer.id,
-            producer.kind,
-            "paused:",
-            producer.paused
-          );
+          // console.log(
+          //   "Producer created:",
+          //   producer.id,
+          //   producer.kind,
+          //   "paused:",
+          //   producer.paused
+          // );
 
           this.broadcast(
             "newProducer",
@@ -285,28 +278,16 @@ class Room extends EventEmitter {
           });
           peer.data.consumers.set(consumer.id, consumer);
 
-          console.log("[consume] Consumer created:", {
-            id: consumer.id,
-            kind: consumer.kind,
-            paused: consumer.paused,
-            producerPaused: consumer.producerPaused,
-          });
+          // console.log("[consume] Consumer created:", {
+          //   id: consumer.id,
+          //   kind: consumer.kind,
+          //   paused: consumer.paused,
+          //   producerPaused: consumer.producerPaused,
+          // });
 
           consumer.on("producerclose", () => {
             peer.notify("consumerClosed", { consumerId: consumer.id });
             peer.data.consumers.delete(consumer.id);
-          });
-          consumer.on("score", (score: any) => {
-            console.log("[consume] Consumer score:", score);
-          });
-          consumer.on("trace", (trace: any) => {
-            console.log("[consume] Trace:", trace);
-          });
-          consumer.on("transportclose", () => {
-            console.log(
-              "[consume] Transport closed for consumer:",
-              consumer.id
-            );
           });
 
           peer.respond(id, true, {

@@ -1,0 +1,23 @@
+echo "import WebSocket from 'ws';
+
+const url = 'ws://host.docker.internal:8000?roomId=test-room&peerId=test123';
+console.log('Connecting to', url);
+
+const ws = new WebSocket(url);
+
+ws.on('message', (msg) => {
+  console.log('msg::', msg);
+});
+
+ws.on('open', () => {
+  console.log('✅ WebSocket connected!');
+});
+
+ws.on('error', (err) => {
+  console.error('❌ WebSocket error:', err.message);
+});
+
+ws.on('close', () => {
+  console.log('🔌 WebSocket closed');
+});
+" > test.js

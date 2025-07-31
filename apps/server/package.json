@@ -16,6 +16,7 @@
   "license": "ISC",
   "devDependencies": {
     "@types/body-parser": "^1.19.6",
+    "@types/cors": "^2.8.19",
     "@types/express": "^5.0.3",
     "@types/node": "^24.1.0",
     "@types/ws": "^8.18.1",
@@ -25,9 +26,12 @@
   "dependencies": {
     "awaitqueue": "^3.2.2",
     "body-parser": "^2.2.0",
+    "cors": "^2.8.5",
     "dotenv": "^17.2.1",
     "express": "^5.1.0",
+    "http-proxy-middleware": "^3.0.5",
     "mediasoup": "^3.16.8",
+    "puppeteer": "^24.15.0",
     "ws": "^8.18.3"
   }
 }

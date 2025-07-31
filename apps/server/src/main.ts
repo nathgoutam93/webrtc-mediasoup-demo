@@ -1,22 +1,33 @@
 import "dotenv/config";
 
+import { config } from "./config.js";
+
 import url from "url";
 import http from "http";
 import express from "express";
+import cors from "cors";
 import bodyParser from "body-parser";
+
+import { fileURLToPath } from "url";
+import { dirname, join } from "path";
+
+import { ChildProcess, fork } from "child_process";
+// import { createProxyMiddleware } from 'http-proxy-middleware';
 
 import mediasoup from "mediasoup";
 import { Worker } from "mediasoup/types";
-
 import { WebSocketServer } from "ws";
 import { AwaitQueue } from "awaitqueue";
 
-import { config } from "./config.js";
 import Room from "./lib/room.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname  = dirname(__filename);
 
 const queue = new AwaitQueue();
 
 const rooms = new Map<string, Room>();
+const roomWorkers = new Map<string, {port: number, process: ChildProcess}>();
 
 let httpServer: http.Server;
 let expressApp: express.Application;
@@ -44,8 +55,35 @@ async function run() {
 
 async function createExpressApp() {
   expressApp = express();
+  expressApp.use(cors())
   expressApp.use(bodyParser.json());
-  expressApp.use(express.static("public"));
+
+  expressApp.use(
+    "/preview",
+    express.static(join(__dirname, "..", "public" , "preview.html"))
+  );
+
+  expressApp.use(
+    '/live', 
+    express.static(join(__dirname, "..", "public" , "hls"))
+  );
+
+  // expressApp.use('/live/:roomId', (req, res, next) => {
+  //   const { roomId } = req.params;
+  //   const worker = roomWorkers.get(roomId);
+    
+  //   if (!worker) return res.status(404).send('Room not streaming');
+  
+    // const proxy = createProxyMiddleware({
+    //   target: `http://localhost:${worker.port}`,
+    //   changeOrigin: true,
+    //   pathRewrite: () => {
+    //     return `/live/${roomId}/live`;
+    //   }
+    // });
+  
+    // proxy(req, res, next);
+  // });
 }
 
 async function runHttpsServer() {
@@ -187,6 +225,19 @@ function getMediasoupWorker() {
   return worker;
 }
 
+function startStreamForRoom(roomId: string) {
+  const port = 5100 + Math.floor(Math.random() * 1000);
+  const proc = fork(
+    join(__dirname, 'lib', 'stream-worker.js'),
+    [roomId, port.toString()],
+    { stdio: 'inherit' }
+  );
+
+  console.log(`child process running on pid: ${proc.pid}`);
+
+  roomWorkers.set(roomId, { port, process: proc });
+}
+
 async function getOrCreateRoom({ roomId }: { roomId: string }) {
   let room = rooms.get(roomId);
   if (!room) {
@@ -196,8 +247,26 @@ async function getOrCreateRoom({ roomId }: { roomId: string }) {
     room = await Room.create(roomId, mediasoupWorker);
     rooms.set(roomId, room);
 
-    room.on("close", () => rooms.delete(roomId));
+    // startStreamForRoom(roomId);
+
+    room.on("peerJoined", (peer) => {
+      console.log(`peer joind emit:: ${peer}`)
+    });
+
+    room.on("close", () => {
+      console.log(`Room [${roomId}] closed`);
+
+      const worker = roomWorkers.get(roomId);
+      if (worker) {
+        console.log(`Killing child process for room [${roomId}], pid: ${worker.process.pid}`);
+        worker.process.kill(); // You can also pass signal if needed: kill('SIGTERM')
+        roomWorkers.delete(roomId);
+      }
+
+      rooms.delete(roomId);
+    });
   }
 
   return room;
 }
+

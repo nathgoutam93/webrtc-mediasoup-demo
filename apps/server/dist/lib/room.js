@@ -250,10 +250,10 @@ class Room extends EventEmitter {
                         paused: false,
                         appData: { peerId: peer.id },
                     });
-                    await consumer.setPreferredLayers({
-                        spatialLayer: 0,
-                        temporalLayer: 0,
-                    });
+                    // await consumer.setPreferredLayers({
+                    //   spatialLayer: 0,
+                    //   temporalLayer: 0,
+                    // });
                     // setTimeout(async () => {
                     //   await consumer.setPreferredLayers({
                     //     spatialLayer: 2,

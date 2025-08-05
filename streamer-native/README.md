@@ -11,10 +11,10 @@ docker run -it --rm \
   -p 8000:8000 \
   server
 
-docker run -it \
+docker run -it --rm \
   --name hls-streamer \
   -v /tmp/hls:/app/hls \
-  streamer $(ipconfig getifaddr en0) test-room
+  streamer "http://$(ipconfig getifaddr en0):8000/preview?roomId=test-room"
 
 ```
 

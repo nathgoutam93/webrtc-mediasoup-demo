@@ -8,12 +8,12 @@ It uses Node.js for the SFU server, and a lightweight Docker‑based streamer th
 - Real‑time conferencing using Mediasoup SFU.
 - HLS streaming for scalable viewer distribution.
 - Docker‑based architecture for easy deployment and isolation.
-- Cross‑platform client built with modern web technologies.
+- client built with modern web technologies.
 - Simple setup: run both SFU and HLS streamer with a few commands.
 
 ## Planned Features
 
-- Auto spin‑up/down HLS streamer
+- Auto spin‑up/down HLS streamer for each unique session
 - Automatically create and stop a dedicated hls-streamer container for each active room.
 - Audio observer for speaker detection
   - Detect active speaker using Mediasoup’s audio observer API.

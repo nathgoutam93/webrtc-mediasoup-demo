@@ -1,15 +1,14 @@
 import os from "os";
 export const config = {
-    domain: process.env.DOMAIN || "localhost",
     http: {
-        listenIp: "0.0.0.0",
+        listenIp: process.env.MEDIASOUP_LISTEN_IP || "0.0.0.0",
         listenPort: process.env.LISTEN_PORT || 8000,
     },
     mediasoup: {
         numWorkers: Object.keys(os.cpus()).length,
         workerSettings: {
             rtcMinPort: 40000,
-            rtcMaxPort: 49999,
+            rtcMaxPort: 40200,
             dtlsCertificateFile: process.env.WORKER_CERT_FULLCHAIN,
             dtlsPrivateKeyFile: process.env.WORKER_CERT_PRIVKEY,
             logLevel: "warn",
@@ -83,25 +82,64 @@ export const config = {
                 {
                     protocol: "udp",
                     ip: process.env.MEDIASOUP_LISTEN_IP || "0.0.0.0",
-                    announcedAddress: process.env.MEDIASOUP_ANNOUNCED_IP,
-                    port: 44444,
+                    announcedIp: process.env.MEDIASOUP_ANNOUNCED_IP,
+                    portRange: {
+                        min: process.env.MEDIASOUP_MIN_PORT || 40000,
+                        max: process.env.MEDIASOUP_MAX_PORT || 40200,
+                    },
                 },
                 {
                     protocol: "tcp",
                     ip: process.env.MEDIASOUP_LISTEN_IP || "0.0.0.0",
-                    announcedAddress: process.env.MEDIASOUP_ANNOUNCED_IP,
-                    port: 44444,
+                    announcedIp: process.env.MEDIASOUP_ANNOUNCED_IP,
+                    portRange: {
+                        min: process.env.MEDIASOUP_MIN_PORT || 40000,
+                        max: process.env.MEDIASOUP_MAX_PORT || 40200,
+                    },
                 },
             ],
         },
         webRtcTransportOptions: {
+            listenInfos: [
+                {
+                    protocol: "udp",
+                    ip: process.env.MEDIASOUP_LISTEN_IP || "0.0.0.0",
+                    announcedIp: process.env.MEDIASOUP_ANNOUNCED_IP,
+                    portRange: {
+                        min: process.env.MEDIASOUP_MIN_PORT || 40000,
+                        max: process.env.MEDIASOUP_MAX_PORT || 40200,
+                    },
+                },
+                {
+                    protocol: "tcp",
+                    ip: process.env.MEDIASOUP_LISTEN_IP || "0.0.0.0",
+                    announcedIp: process.env.MEDIASOUP_ANNOUNCED_IP,
+                    portRange: {
+                        min: process.env.MEDIASOUP_MIN_PORT || 40000,
+                        max: process.env.MEDIASOUP_MAX_PORT || 40200,
+                    },
+                },
+            ],
             enableUdp: true,
             enableTcp: true,
-            preferUdp: true,
             initialAvailableOutgoingBitrate: 1000000,
             minimumAvailableOutgoingBitrate: 600000,
             maxSctpMessageSize: 262144,
             maxIncomingBitrate: 1500000,
+        },
+        plainTransportOptions: {
+            listenInfo: {
+                protocol: "udp",
+                ip: process.env.MEDIASOUP_LISTEN_IP || "0.0.0.0",
+                announcedIp: process.env.MEDIASOUP_ANNOUNCED_IP,
+                portRange: {
+                    min: process.env.MEDIASOUP_MIN_PORT || 40000,
+                    max: process.env.MEDIASOUP_MAX_PORT || 40200,
+                },
+            },
+            maxSctpMessageSize: 262144,
+            rtcpMux: false,
+            comedia: false,
         },
     },
 };

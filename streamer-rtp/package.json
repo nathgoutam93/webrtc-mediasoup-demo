@@ -1,0 +1,22 @@
+{
+  "name": "ffmpeg-streamer",
+  "version": "1.0.0",
+  "description": "",
+  "main": "bot.js",
+  "type": "module",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@roamhq/wrtc": "^0.9.0",
+    "canvas": "^3.1.2",
+    "dgram": "^1.0.1",
+    "i": "^0.3.7",
+    "node-audio-mixer": "^2.1.0",
+    "npm": "^11.5.2",
+    "ws": "^8.18.3"
+  }
+}

@@ -1,0 +1,17 @@
+networks:
+  mynet:
+    driver: bridge
+
+services:
+  sfu:
+    image: my-sfu
+    ports:
+      - "8000:8000"
+      - "40000-49999:40000-49999/udp"
+    networks:
+      - mynet
+
+  browser:
+    image: streamer
+    networks:
+      - mynet

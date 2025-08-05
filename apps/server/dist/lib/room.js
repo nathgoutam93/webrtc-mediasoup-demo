@@ -6,7 +6,8 @@ class Room extends EventEmitter {
     peers;
     worker;
     _mediasoupRouter;
-    _webRtcServer;
+    _nextPort = 50000;
+    _plainExports = new Map();
     // Make constructor private to force async creation
     constructor(roomId, worker) {
         super();
@@ -14,9 +15,7 @@ class Room extends EventEmitter {
         this.peers = new Map();
         this.worker = worker;
         this._mediasoupRouter = null;
-        this._webRtcServer = worker.appData.webRtcServer;
     }
-    // Static async factory method
     static async create(roomId, worker) {
         const room = new Room(roomId, worker);
         await room.init();
@@ -25,6 +24,17 @@ class Room extends EventEmitter {
     async init() {
         const { mediaCodecs } = config.mediasoup.routerOptions;
         this._mediasoupRouter = await this.worker.createRouter({ mediaCodecs });
+    }
+    get router() {
+        if (!this._mediasoupRouter)
+            throw new Error("Router not ready");
+        return this._mediasoupRouter;
+    }
+    get nextRtpPort() {
+        this._nextPort += 2;
+        if (this._nextPort > 60000)
+            this._nextPort = 50000;
+        return this._nextPort;
     }
     createPeer(peerId, transport) {
         if (this.peers.has(peerId)) {
@@ -45,8 +55,19 @@ class Room extends EventEmitter {
         return this.peers.get(peerId);
     }
     removePeer(peerId) {
+        const peer = this.peers.get(peerId);
+        if (!peer)
+            return;
+        if (peer.data.transports) {
+            for (const transport of peer.data.transports.values()) {
+                transport.close();
+            }
+        }
         this.peers.delete(peerId);
         this.emit("peerLeft", peerId);
+        if (this.isEmpty()) {
+            this.close();
+        }
     }
     broadcast(method, data, excludeId = null) {
         for (const [id, peer] of this.peers.entries()) {
@@ -76,17 +97,17 @@ class Room extends EventEmitter {
                     peer.data.rtpCapabilities = rtpCapabilities;
                     this.broadcast("newPeer", { id: peer.id, displayName, device }, peer.id);
                     const peerInfos = Array.from(this.peers.values())
-                        .filter(p => p.id !== peer.id && p.data.joined)
-                        .map(p => ({
+                        .filter((p) => p.id !== peer.id && p.data.joined)
+                        .map((p) => ({
                         id: p.id,
                         displayName: p.data.displayName,
                         device: p.data.device,
                         producers: p.data.producers
                             ? Array.from(p.data.producers.values()).map((pr) => ({
                                 id: pr.id,
-                                kind: pr.kind
+                                kind: pr.kind,
                             }))
-                            : []
+                            : [],
                     }));
                     peer.respond(id, true, { peers: peerInfos });
                     break;
@@ -96,7 +117,6 @@ class Room extends EventEmitter {
                     const { forceTcp } = data;
                     const webRtcTransportOptions = {
                         ...JSON.parse(JSON.stringify(config.mediasoup.webRtcTransportOptions)),
-                        webRtcServer: this._webRtcServer,
                         iceConsentTimeout: 20,
                     };
                     if (forceTcp) {
@@ -106,12 +126,18 @@ class Room extends EventEmitter {
                         webRtcTransportOptions.enableTcp = true;
                     }
                     const transport = await this._mediasoupRouter.createWebRtcTransport(webRtcTransportOptions);
-                    // console.log("Transport created:", {
-                    //   id: transport.id,
-                    //   dtlsState: transport.dtlsState,
-                    //   iceState: transport.iceState,
-                    //   iceSelectedTuple: transport.iceSelectedTuple,
-                    // });
+                    transport.on("icestatechange", (iceState) => {
+                        console.warn('WebRtcTransport "icestatechange" event [iceState:%s]', iceState);
+                        if (iceState === "disconnected" || iceState === "closed") {
+                            peer.close();
+                        }
+                    });
+                    transport.on("dtlsstatechange", (dtlsState) => {
+                        console.log('WebRtcTransport "dtlsstatechange" event [dtlsState:%s]', dtlsState);
+                        if (dtlsState === "failed" || dtlsState === "closed") {
+                            peer.close();
+                        }
+                    });
                     if (!peer.data.transports)
                         peer.data.transports = new Map();
                     peer.data.transports.set(transport.id, transport);
@@ -147,17 +173,22 @@ class Room extends EventEmitter {
                     const producer = await transportProd.produce({
                         kind,
                         rtpParameters,
-                        appData: { peerId: peer.id },
+                        appData: { peerId: peer.id, roomId: this.id },
                     });
                     peer.data.producers.set(producer.id, producer);
-                    // console.log(
-                    //   "Producer created:",
-                    //   producer.id,
-                    //   producer.kind,
-                    //   "paused:",
-                    //   producer.paused
-                    // );
-                    this.broadcast("newProducer", { peerId: peer.id, displayName: peer.data.displayName, producerId: producer.id, kind }, peer.id);
+                    producer.on("score", (score) => {
+                        console.log('producer "score" event [producerId:%s, score:%o]', producer.id, score);
+                        this.broadcast("producerScore", {
+                            peerId: peer.id,
+                            score,
+                        });
+                    });
+                    this.broadcast("newProducer", {
+                        peerId: peer.id,
+                        displayName: peer.data.displayName,
+                        producerId: producer.id,
+                        kind,
+                    }, peer.id);
                     peer.respond(id, true, { id: producer.id });
                     break;
                 case "closeProducer":
@@ -172,6 +203,14 @@ class Room extends EventEmitter {
                     producerToClose.close();
                     peer.data.producers.delete(producerToClose.id);
                     this.broadcast("producerClosed", { producerId: producerToClose.id, peerId: peer.id }, peer.id);
+                    // find related plain export(s), close transport/consumer and delete from cache
+                    for (const [key, rec] of this._plainExports.entries()) {
+                        if (rec.producerId === producerId) {
+                            rec.consumer.close();
+                            rec.transport.close();
+                            this._plainExports.delete(key);
+                        }
+                    }
                     peer.respond(id, true, {});
                     break;
                 case "consume":
@@ -211,6 +250,16 @@ class Room extends EventEmitter {
                         paused: false,
                         appData: { peerId: peer.id },
                     });
+                    await consumer.setPreferredLayers({
+                        spatialLayer: 0,
+                        temporalLayer: 0,
+                    });
+                    // setTimeout(async () => {
+                    //   await consumer.setPreferredLayers({
+                    //     spatialLayer: 2,
+                    //     temporalLayer: 2,
+                    //   });
+                    // }, 1000 * 60);
                     peer.data.consumers.set(consumer.id, consumer);
                     // console.log("[consume] Consumer created:", {
                     //   id: consumer.id,
@@ -294,15 +343,160 @@ class Room extends EventEmitter {
                     await resumeConsumer.resume();
                     peer.respond(id, true, {});
                     break;
-                case "changeDisplayName":
+                case "changeDisplayName": {
                     if (!peer.data.joined)
                         throw new Error("Peer not yet joined");
-                    peer.data.displayName = data.displayName;
+                    const { displayName } = data;
+                    peer.data.displayName = displayName;
                     this.broadcast("peerDisplayNameChanged", {
                         peerId: peer.id,
                         displayName: peer.data.displayName,
                     }, peer.id);
                     break;
+                }
+                // ONLY USE BY BOTS
+                case "joinPlain": {
+                    if (!peer.data)
+                        peer.data = {};
+                    if (peer.data.joined)
+                        throw new Error("Peer already joined");
+                    const { displayName } = data;
+                    peer.data.joined = true;
+                    peer.data.displayName = displayName || peer.id;
+                    peer.data.isPlainBot = true;
+                    peer.respond(id, true, { ok: true });
+                    break;
+                }
+                case "listProducers":
+                    if (!this._mediasoupRouter)
+                        throw new Error("Router not ready");
+                    const allProducers = [];
+                    for (const p of this.peers.values()) {
+                        if (p.data?.producers) {
+                            for (const prod of p.data.producers.values()) {
+                                allProducers.push({
+                                    id: prod.id,
+                                    kind: prod.kind,
+                                    codec: prod.rtpParameters.codecs[0].mimeType.split("/")[1],
+                                    payloadType: prod.rtpParameters.codecs[0].payloadType,
+                                });
+                            }
+                        }
+                    }
+                    peer.respond(id, true, allProducers);
+                    break;
+                case "createPlainConsumer": {
+                    if (!peer.data.joined)
+                        throw new Error("Peer not yet joined");
+                    if (!this._mediasoupRouter)
+                        throw new Error("Router not ready");
+                    const { producerId, port, rtcpPort, ip } = data;
+                    if (!port || !ip)
+                        throw new Error("did not provide UDP port or IP");
+                    const receiverIp = ip;
+                    const receiverPort = port;
+                    const receiverRtcpPort = rtcpPort;
+                    // find producer
+                    const producer = (() => {
+                        for (const p of this.peers.values()) {
+                            if (p.data?.producers?.has(producerId)) {
+                                return p.data.producers.get(producerId);
+                            }
+                        }
+                        return null;
+                    })();
+                    if (!producer)
+                        throw new Error(`Producer ${producerId} not found`);
+                    // create plain transport
+                    const transport = await this._mediasoupRouter.createPlainTransport(config.mediasoup.plainTransportOptions);
+                    await transport.connect({
+                        ip: receiverIp,
+                        port: receiverPort,
+                        rtcpPort: receiverRtcpPort, // <-- missing in your SFU code now
+                    });
+                    // consumer
+                    const consumer = await transport.consume({
+                        producerId: producer.id,
+                        paused: false,
+                        rtpCapabilities: this._mediasoupRouter.rtpCapabilities,
+                    });
+                    await consumer.resume();
+                    if (consumer.kind === "video") {
+                        const interval = setInterval(() => {
+                            consumer.requestKeyFrame();
+                        }, 500); // every 500ms
+                        setTimeout(() => clearInterval(interval), 2000); // for 2s
+                    }
+                    // store and respond
+                    if (!peer.data.transports)
+                        peer.data.transports = new Map();
+                    peer.data.transports.set(transport.id, transport);
+                    if (!peer.data.consumers)
+                        peer.data.consumers = new Map();
+                    peer.data.consumers.set(consumer.id, consumer);
+                    this._plainExports.set(consumer.id, {
+                        producerId: producer.id,
+                        transport,
+                        consumer,
+                    });
+                    const codec = producer.rtpParameters.codecs[0];
+                    peer.respond(id, true, {
+                        producerId,
+                        kind: consumer.kind,
+                        rtpParameters: consumer.rtpParameters,
+                        payloadType: codec.payloadType,
+                        codec: codec.mimeType.split("/")[1],
+                    });
+                    break;
+                }
+                case "requestKeyframe": {
+                    const { producerId } = data;
+                    let found = false;
+                    for (const p of this.peers.values()) {
+                        if (p.data?.consumers) {
+                            for (const consumer of p.data.consumers.values()) {
+                                if (consumer.producerId === producerId &&
+                                    consumer.kind === "video") {
+                                    console.log(`Requesting keyframe for consumer ${consumer.id}`);
+                                    await consumer.resume();
+                                    await consumer.requestKeyFrame();
+                                    found = true;
+                                }
+                            }
+                        }
+                    }
+                    if (!found) {
+                        peer.respond(id, false, `No consumer found for producer ${producerId}`);
+                    }
+                    peer.respond(id, true, `keyframe requested`);
+                    break;
+                }
+                case "resumePlainConsumer": {
+                    const { producerId } = data;
+                    for (const p of this.peers.values()) {
+                        if (p.data?.consumers) {
+                            for (const consumer of p.data.consumers.values()) {
+                                if (consumer.producerId === producerId) {
+                                    await consumer.resume();
+                                    console.log(`Consumer resumed: ${consumer.id}`);
+                                }
+                            }
+                        }
+                    }
+                    peer.respond(id, true, "consumer resumed");
+                    break;
+                }
+                case "closePlainConsumer": {
+                    const { producerId } = data;
+                    const entry = [...this._plainExports.values()].find((e) => e.producerId === producerId);
+                    if (entry) {
+                        entry.consumer.close();
+                        entry.transport.close();
+                        this._plainExports.delete([...this._plainExports.keys()].find((k) => this._plainExports.get(k) === entry));
+                    }
+                    peer.respond(id, true, {});
+                    break;
+                }
                 default:
                     console.error('unknown request.method "%s"', method);
                     peer.respond(id, false, "Unknown method");
@@ -337,9 +531,6 @@ class Room extends EventEmitter {
         ws.on("close", () => {
             this.removePeer(peerId);
             this.broadcast("peerLeft", { peerId }, peerId);
-            if (this.isEmpty()) {
-                this.close();
-            }
         });
         this.broadcast("newPeer", { peerId }, peerId);
         this.emit("peerJoined", peer);

@@ -5,7 +5,7 @@
   "main": "main.js",
   "type": "module",
   "scripts": {
-    "dev": "npm-run-all --parallel watch serve",
+    "dev": "turbo run watch serve --parallel",
     "watch": "tsc -w -p .",
     "serve": "nodemon dist/main.js",
     "build": "tsc -p .",
@@ -20,8 +20,7 @@
     "@types/express": "^5.0.3",
     "@types/node": "^24.1.0",
     "@types/ws": "^8.18.1",
-    "nodemon": "^3.1.0",
-    "npm-run-all": "^4.1.5"
+    "nodemon": "^3.1.0"
   },
   "dependencies": {
     "awaitqueue": "^3.2.2",
@@ -29,9 +28,8 @@
     "cors": "^2.8.5",
     "dotenv": "^17.2.1",
     "express": "^5.1.0",
-    "http-proxy-middleware": "^3.0.5",
     "mediasoup": "^3.16.8",
-    "puppeteer": "^24.15.0",
+    "typescript": "^5.9.2",
     "ws": "^8.18.3"
   }
 }

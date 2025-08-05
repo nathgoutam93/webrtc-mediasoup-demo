@@ -11,10 +11,7 @@ import bodyParser from "body-parser";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 
-import { ChildProcess, fork } from "child_process";
-// import { createProxyMiddleware } from 'http-proxy-middleware';
-
-import mediasoup from "mediasoup";
+import { createWorker, observer } from "mediasoup";
 import { Worker } from "mediasoup/types";
 import { WebSocketServer } from "ws";
 import { AwaitQueue } from "awaitqueue";
@@ -22,12 +19,11 @@ import { AwaitQueue } from "awaitqueue";
 import Room from "./lib/room.js";
 
 const __filename = fileURLToPath(import.meta.url);
-const __dirname  = dirname(__filename);
+const __dirname = dirname(__filename);
+
+// const rootPath = resolve(__dirname, "../../..");
 
 const queue = new AwaitQueue();
-
-const rooms = new Map<string, Room>();
-const roomWorkers = new Map<string, {port: number, process: ChildProcess}>();
 
 let httpServer: http.Server;
 let expressApp: express.Application;
@@ -35,6 +31,8 @@ let webSocketServer: WebSocketServer;
 
 const mediasoupWorkers: Worker[] = [];
 let nextMediasoupWorkerIdx = 0;
+
+const rooms = new Map<string, Room>();
 
 const workers = new Map();
 const webRtcServers = new Map();
@@ -55,35 +53,15 @@ async function run() {
 
 async function createExpressApp() {
   expressApp = express();
-  expressApp.use(cors())
+  expressApp.use(cors());
   expressApp.use(bodyParser.json());
 
   expressApp.use(
     "/preview",
-    express.static(join(__dirname, "..", "public" , "preview.html"))
+    express.static(join(__dirname, "..", "public", "preview"))
   );
 
-  expressApp.use(
-    '/live', 
-    express.static(join(__dirname, "..", "public" , "hls"))
-  );
-
-  // expressApp.use('/live/:roomId', (req, res, next) => {
-  //   const { roomId } = req.params;
-  //   const worker = roomWorkers.get(roomId);
-    
-  //   if (!worker) return res.status(404).send('Room not streaming');
-  
-    // const proxy = createProxyMiddleware({
-    //   target: `http://localhost:${worker.port}`,
-    //   changeOrigin: true,
-    //   pathRewrite: () => {
-    //     return `/live/${roomId}/live`;
-    //   }
-    // });
-  
-    // proxy(req, res, next);
-  // });
+  expressApp.use("/live", express.static("/tmp/hls"));
 }
 
 async function runHttpsServer() {
@@ -123,7 +101,7 @@ async function runWebSocketServer() {
 }
 
 function runMediasoupObserver() {
-  mediasoup.observer.on("newworker", (worker) => {
+  observer.on("newworker", (worker) => {
     // Store the latest worker in a global variable.
     global.worker = worker;
 
@@ -154,12 +132,14 @@ function runMediasoupObserver() {
         transports.set(transport.id, transport);
         transport.observer.on("close", () => transports.delete(transport.id));
 
-        transport.observer.on("newproducer", (producer) => {
+        transport.observer.on("newproducer", async (producer) => {
           // Store the latest producer in a global variable.
           global.producer = producer;
-
           producers.set(producer.id, producer);
-          producer.observer.on("close", () => producers.delete(producer.id));
+
+          producer.observer.on("close", async () => {
+            producers.delete(producer.id);
+          });
         });
 
         transport.observer.on("newconsumer", (consumer) => {
@@ -180,7 +160,7 @@ async function runMediasoupWorkers() {
   console.info("running %d mediasoup Workers...", numWorkers);
 
   for (let i = 0; i < numWorkers; ++i) {
-    const worker = await mediasoup.createWorker({
+    const worker = await createWorker({
       dtlsCertificateFile: config.mediasoup.workerSettings.dtlsCertificateFile,
       dtlsPrivateKeyFile: config.mediasoup.workerSettings.dtlsPrivateKeyFile,
       logLevel: config.mediasoup.workerSettings.logLevel,
@@ -225,19 +205,6 @@ function getMediasoupWorker() {
   return worker;
 }
 
-function startStreamForRoom(roomId: string) {
-  const port = 5100 + Math.floor(Math.random() * 1000);
-  const proc = fork(
-    join(__dirname, 'lib', 'stream-worker.js'),
-    [roomId, port.toString()],
-    { stdio: 'inherit' }
-  );
-
-  console.log(`child process running on pid: ${proc.pid}`);
-
-  roomWorkers.set(roomId, { port, process: proc });
-}
-
 async function getOrCreateRoom({ roomId }: { roomId: string }) {
   let room = rooms.get(roomId);
   if (!room) {
@@ -250,23 +217,14 @@ async function getOrCreateRoom({ roomId }: { roomId: string }) {
     // startStreamForRoom(roomId);
 
     room.on("peerJoined", (peer) => {
-      console.log(`peer joind emit:: ${peer}`)
+      console.log(`peer joind emit:: ${peer}`);
     });
 
     room.on("close", () => {
       console.log(`Room [${roomId}] closed`);
-
-      const worker = roomWorkers.get(roomId);
-      if (worker) {
-        console.log(`Killing child process for room [${roomId}], pid: ${worker.process.pid}`);
-        worker.process.kill(); // You can also pass signal if needed: kill('SIGTERM')
-        roomWorkers.delete(roomId);
-      }
-
       rooms.delete(roomId);
     });
   }
 
   return room;
 }
-

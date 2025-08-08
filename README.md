@@ -20,7 +20,7 @@ It uses Node.js for the SFU server, and a lightweight Docker‑based streamer th
   - Highlight the person speaking and keep them in the top position in the UI.
 - Simulcast support
   - Automatically switch to highest quality for active speaker, lower quality for others.
-    -UI improvements
+- UI improvements
   - Better participant layout.
   - Real‑time speaker indication.
   - Improved mobile responsiveness.
